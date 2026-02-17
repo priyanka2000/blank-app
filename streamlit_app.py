@@ -13,7 +13,7 @@ from io import StringIO
 st.set_page_config(
     page_title="Procurement Planning – Beverage Industry",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 # ============================================================
@@ -26,38 +26,44 @@ def generate_dummy_data():
     categories = ["Beverage", "Ingredient", "Packaging"]
     packs = ["Bottle", "Can", "Sachet", "6-pack", "12-pack"]
 
-    skus_df = pd.DataFrame({
-        "sku": skus,
-        "description": [f"Product {i}" for i in range(1, 31)],
-        "category": np.random.choice(categories, size=30),
-        "pack_size": np.random.choice(packs, size=30),
-        "baseline_cost": np.round(np.random.uniform(0.5, 15.0, size=30), 2),
-        "safety_stock": np.random.randint(50, 300, size=30),
-    })
+    skus_df = pd.DataFrame(
+        {
+            "sku": skus,
+            "description": [f"Product {i}" for i in range(1, 31)],
+            "category": np.random.choice(categories, size=30),
+            "pack_size": np.random.choice(packs, size=30),
+            "baseline_cost": np.round(np.random.uniform(0.5, 15.0, size=30), 2),
+            "safety_stock": np.random.randint(50, 300, size=30),
+        }
+    )
 
     suppliers = [f"Supplier-{c}" for c in list("ABCDEFGH")]
-    suppliers_df = pd.DataFrame({
-        "supplier": suppliers,
-        "region": np.random.choice(["North", "South", "East", "West"], size=len(suppliers)),
-        "lead_time_days": np.random.randint(3, 30, size=len(suppliers)),
-        "moq": np.random.randint(50, 500, size=len(suppliers)),
-        "capacity_per_period": np.random.randint(500, 6000, size=len(suppliers)),
-        "risk_score": np.round(np.random.uniform(0, 1, size=len(suppliers)), 2)
-    })
+    suppliers_df = pd.DataFrame(
+        {
+            "supplier": suppliers,
+            "region": np.random.choice(["North", "South", "East", "West"], size=len(suppliers)),
+            "lead_time_days": np.random.randint(3, 30, size=len(suppliers)),
+            "moq": np.random.randint(50, 500, size=len(suppliers)),
+            "capacity_per_period": np.random.randint(500, 6000, size=len(suppliers)),
+            "risk_score": np.round(np.random.uniform(0, 1, size=len(suppliers)), 2),
+        }
+    )
 
     # Supplier pricing
     rows = []
     for sku in skus:
         chosen = np.random.choice(suppliers, size=4, replace=False)
         for s in chosen:
-            rows.append({
-                "sku": sku,
-                "supplier": s,
-                "unit_price": np.round(np.random.uniform(0.5, 20.0), 2),
-                "lead_time": suppliers_df.loc[suppliers_df.supplier == s, "lead_time_days"].values[0],
-                "moq": suppliers_df.loc[suppliers_df.supplier == s, "moq"].values[0],
-                "capacity": suppliers_df.loc[suppliers_df.supplier == s, "capacity_per_period"].values[0],
-            })
+            rows.append(
+                {
+                    "sku": sku,
+                    "supplier": s,
+                    "unit_price": np.round(np.random.uniform(0.5, 20.0), 2),
+                    "lead_time": suppliers_df.loc[suppliers_df.supplier == s, "lead_time_days"].values[0],
+                    "moq": suppliers_df.loc[suppliers_df.supplier == s, "moq"].values[0],
+                    "capacity": suppliers_df.loc[suppliers_df.supplier == s, "capacity_per_period"].values[0],
+                }
+            )
 
     supplier_price_df = pd.DataFrame(rows)
 
@@ -66,19 +72,23 @@ def generate_dummy_data():
     forecast_rows = []
     for p in periods:
         for sku in skus:
-            forecast_rows.append({
-                "period": p.strftime("%Y-%m"),
-                "sku": sku,
-                "forecast_qty": int(np.random.poisson(300))
-            })
+            forecast_rows.append(
+                {
+                    "period": p.strftime("%Y-%m"),
+                    "sku": sku,
+                    "forecast_qty": int(np.random.poisson(300)),
+                }
+            )
     forecast_df = pd.DataFrame(forecast_rows)
 
     # Inventory
-    inventory_df = pd.DataFrame({
-        "sku": skus,
-        "on_hand": np.random.randint(0, 2000, size=30),
-        "allocated": np.random.randint(0, 200, size=30)
-    })
+    inventory_df = pd.DataFrame(
+        {
+            "sku": skus,
+            "on_hand": np.random.randint(0, 2000, size=30),
+            "allocated": np.random.randint(0, 200, size=30),
+        }
+    )
 
     # BOM
     components = [f"COMP-{i:02d}" for i in range(1, 11)]
@@ -86,11 +96,13 @@ def generate_dummy_data():
     for sku in skus:
         used = np.random.choice(components, size=np.random.randint(1, 5), replace=False)
         for c in used:
-            bom_rows.append({
-                "sku": sku,
-                "component": c,
-                "qty_per_parent": np.random.randint(1, 5)
-            })
+            bom_rows.append(
+                {
+                    "sku": sku,
+                    "component": c,
+                    "qty_per_parent": np.random.randint(1, 5),
+                }
+            )
 
     bom_df = pd.DataFrame(bom_rows)
 
@@ -101,12 +113,14 @@ def generate_dummy_data():
         "forecast": forecast_df,
         "inventory": inventory_df,
         "bom": bom_df,
-        "periods": list(periods.strftime("%Y-%m"))
+        "periods": list(periods.strftime("%Y-%m")),
     }
+
 
 @st.cache_data
 def load_data():
     return generate_dummy_data()
+
 
 data = load_data()
 
@@ -114,26 +128,32 @@ data = load_data()
 #                   NAVIGATION SIDEBAR
 # ============================================================
 
+
 def sidebar_navigation():
     st.sidebar.title("PROCUREMENT SUITE")
-    return st.sidebar.radio("Navigate to:", [
-        "Executive Overview",
-        "Planner Workbench",
-        "Optimization Results",
-        "Root Cause Analysis",
-        "Scenario Simulation",
-        "BOM & Dependencies",
-        "Constraints Dashboard",
-        "PO Creation",
-        "Mobile Ops",
-        "Business Landscape",
-        "Input Data Spec",
-        "Output Data Spec"
-    ])
+    return st.sidebar.radio(
+        "Navigate to:",
+        [
+            "Executive Overview",
+            "Planner Workbench",
+            "Optimization Results",
+            "Root Cause Analysis",
+            "Scenario Simulation",
+            "BOM & Dependencies",
+            "Constraints Dashboard",
+            "PO Creation",
+            "Mobile Ops",
+            "Business Landscape",
+            "Input Data Spec",
+            "Output Data Spec",
+        ],
+    )
+
 
 # ============================================================
 #                EXECUTIVE DASHBOARD
 # ============================================================
+
 
 def exec_dashboard():
     st.title("📊 Executive Overview")
@@ -154,7 +174,7 @@ def exec_dashboard():
         y="supplier",
         size="capacity_per_period",
         color="risk_score",
-        color_continuous_scale="OrRd"
+        color_continuous_scale="OrRd",
     )
     st.plotly_chart(fig, use_container_width=True)
 
