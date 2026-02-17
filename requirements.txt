@@ -2,3 +2,6 @@ streamlit==1.40.1
 pandas==2.2.2
 numpy==1.26.4
 plotly==5.22.0
+
+# Optimization solver
+pulp==2.7.0

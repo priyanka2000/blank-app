@@ -8,6 +8,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import pulp as pl
 from io import StringIO
 
 st.set_page_config(
@@ -337,6 +338,23 @@ def scenario_simulation():
             }
             st.success(f"Scenario '{name}' saved")
 
+    # Run optimization for the current (unsaved) scenario to show impact live
+    if st.button("Run Optimization for Current Scenario"):
+        params = {
+            "lt_change": lt_change,
+            "demand_change": demand_change,
+            "price_change": price_change,
+            "capacity_change": capacity_change,
+        }
+        with st.spinner("Running optimization..."):
+            plan = optimize_plan(params)
+        if plan is None:
+            st.error("Optimization infeasible (not enough capacity). Try relaxing constraints or changing scenario parameters.")
+        else:
+            st.subheader("Optimization Summary")
+            st.metric("Total Cost", f"${plan['total_cost'].sum():,.0f}")
+            st.dataframe(plan.head(50))
+
 # ============================================================
 #               SCENARIO COMPARISON
 # ============================================================
@@ -384,6 +402,17 @@ def scenario_comparison():
 
     st.info("Use these numbers as illustrative impacts; connect to optimization engine for production-grade comparisons.")
 
+    # Offer an optimized plan preview for the selected scenario
+    if st.button("Run Optimization for selected scenario"):
+        with st.spinner("Running optimization..."):
+            plan = optimize_plan(params)
+        if plan is None:
+            st.error("Optimization infeasible for this scenario (capacity < demand).")
+        else:
+            st.subheader("Optimized Procurement Plan (sample)")
+            st.dataframe(plan.head(50))
+            st.metric("Total Cost", f"${plan['total_cost'].sum():,.0f}")
+
 # ============================================================
 #               BOM & DEPENDENCIES
 # ============================================================
@@ -396,6 +425,88 @@ def bom_dependencies():
 
     st.subheader(f"Components for {sku}")
     st.dataframe(bom)
+
+
+def optimize_plan(params: dict):
+    """Run a simple LP to minimize procurement cost under supplier capacity and MOQ constraints.
+
+    params keys: demand_change (%), price_change (%), capacity_change (%)
+    Returns allocation DataFrame or None if infeasible.
+    """
+    # prepare demand per SKU (12-month sum) and offers
+    forecast = data["forecast"].groupby("sku")["forecast_qty"].sum().rename("demand")
+    demand = forecast.to_dict()
+
+    offers = data["supplier_price"].copy()
+    # apply price factor and capacity factor
+    price_factor = 1 + params.get("price_change", 0) / 100.0
+    capacity_factor = 1 + params.get("capacity_change", 0) / 100.0
+    offers["adj_price"] = offers["unit_price"] * price_factor
+
+    # supplier capacities
+    supplier_caps = data["suppliers"].set_index("supplier")["capacity_per_period"].to_dict()
+
+    # Build LP
+    prob = pl.LpProblem("procure_opt", pl.LpMinimize)
+
+    # Variables: continuous order qty per offer and binary use flag for MOQ
+    vars_x = {}
+    vars_y = {}
+    bigM = {}
+
+    for idx, row in offers.iterrows():
+        name = f"x_{idx}"
+        vars_x[idx] = pl.LpVariable(name, lowBound=0, cat="Continuous")
+        vars_y[idx] = pl.LpVariable(f"y_{idx}", cat="Binary")
+        bigM[idx] = demand.get(row["sku"], 0)
+
+    # Objective: minimize total cost
+    prob += pl.lpSum([vars_x[i] * offers.loc[i, "adj_price"] for i in offers.index])
+
+    # Demand satisfaction per SKU
+    for sku, qty in demand.items():
+        related = [vars_x[i] for i in offers[offers["sku"] == sku].index]
+        if related:
+            prob += pl.lpSum(related) == qty * (1 + params.get("demand_change", 0) / 100.0)
+
+    # Supplier capacity
+    for sup, cap in supplier_caps.items():
+        related = [vars_x[i] for i in offers[offers["supplier"] == sup].index]
+        if related:
+            prob += pl.lpSum(related) <= cap * capacity_factor
+
+    # MOQ linking
+    for i, row in offers.iterrows():
+        moq = row.get("moq", 0)
+        prob += vars_x[i] <= bigM[i] * vars_y[i]
+        # if chosen, meet MOQ
+        prob += vars_x[i] >= moq * vars_y[i]
+
+    # Solve with default solver
+    status = prob.solve(pl.PULP_CBC_CMD(msg=False))
+    if pl.LpStatus[status] != "Optimal":
+        return None
+
+    # Build result
+    alloc = []
+    for i, row in offers.iterrows():
+        q = pl.value(vars_x[i])
+        if q is None:
+            q = 0
+        if q > 0:
+            alloc.append({
+                "sku": row["sku"],
+                "supplier": row["supplier"],
+                "order_qty": float(q),
+                "unit_price": float(row["unit_price"]),
+                "adj_price": float(row["adj_price"]),
+                "total_cost": float(q) * float(row["unit_price"]),
+            })
+
+    plan_df = pd.DataFrame(alloc)
+    if plan_df.empty:
+        return None
+    return plan_df
 
 # ============================================================
 #               CONSTRAINTS DASHBOARD
