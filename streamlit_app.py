@@ -132,24 +132,63 @@ data = load_data()
 
 def sidebar_navigation():
     st.sidebar.title("PROCUREMENT SUITE")
-    return st.sidebar.radio(
-        "Navigate to:",
-        [
+    role = st.session_state.get("user_role", "Planner")
+
+    role_pages = {
+        "Executive": [
+            "Executive Overview",
+            "Scenario Comparison",
+            "Business Landscape",
+            "Constraints Dashboard",
+            "Input Data Spec",
+            "Output Data Spec",
+        ],
+        "Planner": [
             "Executive Overview",
             "Planner Workbench",
             "Optimization Results",
-            "Root Cause Analysis",
             "Scenario Simulation",
             "Scenario Comparison",
             "BOM & Dependencies",
             "Constraints Dashboard",
             "PO Creation",
             "Mobile Ops",
-            "Business Landscape",
             "Input Data Spec",
             "Output Data Spec",
         ],
-    )
+        "Buyer": [
+            "Planner Workbench",
+            "PO Creation",
+            "Optimization Results",
+            "Constraints Dashboard",
+            "Input Data Spec",
+            "Output Data Spec",
+        ],
+        "Engineer": [
+            "BOM & Dependencies",
+            "Planner Workbench",
+            "Constraints Dashboard",
+            "Input Data Spec",
+            "Output Data Spec",
+        ],
+    }
+
+    pages = role_pages.get(role, [
+        "Executive Overview",
+        "Planner Workbench",
+        "Optimization Results",
+        "Scenario Simulation",
+        "Scenario Comparison",
+        "BOM & Dependencies",
+        "Constraints Dashboard",
+        "PO Creation",
+        "Mobile Ops",
+        "Business Landscape",
+        "Input Data Spec",
+        "Output Data Spec",
+    ])
+
+    return st.sidebar.radio("Navigate to:", pages)
 
 
 def get_user_role():
