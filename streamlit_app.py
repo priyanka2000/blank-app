@@ -307,9 +307,14 @@ def scenario_simulation():
     with col1:
         lt_change = st.slider("Supplier Lead Time ± (%)", -20, 20, 0)
         demand_change = st.slider("Demand Shift ± (%)", -30, 30, 0)
+        # Service level and lead-time threshold
+        service_level = st.slider("Service Level Target (%)", 50, 100, 90)
+        max_lead_time = st.number_input("Max lead time for service level (days)", min_value=1, max_value=180, value=14)
     with col2:
         price_change = st.slider("Price Variance ± (%)", -15, 15, 0)
         capacity_change = st.slider("Capacity Adjust ± (%)", -50, 50, 0)
+        # Supplier risk penalty (multiplier applied to price by risk_score)
+        risk_penalty = st.slider("Supplier Risk Penalty (0=no penalty → 1=high)", 0.0, 1.0, 0.2)
 
     st.markdown("### Scenario Summary")
     st.write({
@@ -317,6 +322,9 @@ def scenario_simulation():
         "Demand Change": demand_change,
         "Price Change": price_change,
         "Capacity Change": capacity_change,
+        "Service Level (%)": service_level,
+        "Max Lead Time (days)": max_lead_time,
+        "Risk Penalty": risk_penalty,
     })
 
     st.info("Scenario applied. Optimization impact will appear here.")
@@ -335,6 +343,9 @@ def scenario_simulation():
                 "demand_change": demand_change,
                 "price_change": price_change,
                 "capacity_change": capacity_change,
+                "service_level": service_level,
+                "max_lead_time": int(max_lead_time),
+                "risk_penalty": float(risk_penalty),
             }
             st.success(f"Scenario '{name}' saved")
 
@@ -405,13 +416,20 @@ def scenario_comparison():
     # Offer an optimized plan preview for the selected scenario
     if st.button("Run Optimization for selected scenario"):
         with st.spinner("Running optimization..."):
-            plan = optimize_plan(params)
+            # ensure params include service_level and risk if present in scenario
+            if "service_level" in params:
+                params_local = params
+            else:
+                params_local = params
+            plan = optimize_plan(params_local)
         if plan is None:
             st.error("Optimization infeasible for this scenario (capacity < demand).")
         else:
             st.subheader("Optimized Procurement Plan (sample)")
             st.dataframe(plan.head(50))
             st.metric("Total Cost", f"${plan['total_cost'].sum():,.0f}")
+            # store last plan for Output Data Spec
+            st.session_state.last_plan = plan
 
 # ============================================================
 #               BOM & DEPENDENCIES
@@ -441,7 +459,16 @@ def optimize_plan(params: dict):
     # apply price factor and capacity factor
     price_factor = 1 + params.get("price_change", 0) / 100.0
     capacity_factor = 1 + params.get("capacity_change", 0) / 100.0
-    offers["adj_price"] = offers["unit_price"] * price_factor
+    # risk_penalty scales with supplier risk_score (0..1)
+    risk_penalty = float(params.get("risk_penalty", 0.0))
+    offers["adj_price"] = offers["unit_price"] * price_factor * (1 + risk_penalty * offers.get("lead_time", 0) * 0)
+    # if supplier risk_score exists, include its effect
+    if "risk_score" in data["suppliers"].columns:
+        # merge supplier risk into offers
+        offers = offers.merge(data["suppliers"][["supplier", "risk_score"]], on="supplier", how="left")
+        offers["adj_price"] = offers["unit_price"] * price_factor * (1 + risk_penalty * offers["risk_score"].fillna(0))
+    else:
+        offers["adj_price"] = offers["unit_price"] * price_factor
 
     # supplier capacities
     supplier_caps = data["suppliers"].set_index("supplier")["capacity_per_period"].to_dict()
@@ -468,6 +495,15 @@ def optimize_plan(params: dict):
         related = [vars_x[i] for i in offers[offers["sku"] == sku].index]
         if related:
             prob += pl.lpSum(related) == qty * (1 + params.get("demand_change", 0) / 100.0)
+
+    # Service level requirement: require a fraction of demand served by offers with lead_time <= max_lead_time
+    service_level = float(params.get("service_level", 0.0)) / 100.0
+    max_lead_time = params.get("max_lead_time", None)
+    if service_level > 0 and max_lead_time is not None:
+        for sku, qty in demand.items():
+            related_fast = [vars_x[i] for i in offers[(offers["sku"] == sku) & (offers["lead_time"] <= float(max_lead_time))].index]
+            if related_fast:
+                prob += pl.lpSum(related_fast) >= service_level * qty * (1 + params.get("demand_change", 0) / 100.0)
 
     # Supplier capacity
     for sup, cap in supplier_caps.items():
@@ -584,12 +620,49 @@ def input_data_spec():
 def output_data_spec():
     st.title("📤 Output Data Specification")
     st.write("""
-    - Procurement Plan  
-    - Supplier Allocation  
-    - Total Cost  
-    - Constraint Violations  
-    - PO File  
+    This page provides KPI summaries and complete output tables produced by the optimization engine.
     """)
+
+    # KPI summary (from last optimization if available)
+    st.subheader("KPI Summary")
+    lp = st.session_state.get("last_plan")
+    baseline = st.session_state.get("baseline_plan")
+    if lp is not None:
+        total_cost = lp["total_cost"].sum()
+        avg_price = lp["adj_price"].mean() if "adj_price" in lp.columns else lp["unit_price"].mean()
+        suppliers_engaged = lp["supplier"].nunique()
+        st.metric("Optimized Total Cost", f"${total_cost:,.0f}")
+        st.metric("Optimized Avg Unit Price", f"${avg_price:.2f}")
+        st.metric("Suppliers Engaged", f"{suppliers_engaged}")
+    else:
+        st.info("No optimization run in this session yet. Run a scenario optimization to populate outputs.")
+
+    st.subheader("Full Output Tables")
+    st.write("**Optimized Procurement Plan (last run)**")
+    if lp is not None:
+        st.dataframe(lp)
+    else:
+        st.write("(no optimized plan)")
+
+    st.write("**Baseline Plan (derived)**")
+    if baseline is not None:
+        st.dataframe(baseline)
+    else:
+        st.write("(no baseline saved)")
+
+    st.write("**All Input Tables**")
+    with st.expander("SKUs"):
+        st.dataframe(data["skus"])
+    with st.expander("Suppliers"):
+        st.dataframe(data["suppliers"])
+    with st.expander("Supplier Offers"):
+        st.dataframe(data["supplier_price"])
+    with st.expander("Forecast"):
+        st.dataframe(data["forecast"].head(200))
+    with st.expander("Inventory"):
+        st.dataframe(data["inventory"])
+    with st.expander("BOM"):
+        st.dataframe(data["bom"].head(200))
 
 # ============================================================
 #                   MAIN ROUTER
