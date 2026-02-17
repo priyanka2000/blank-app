@@ -167,22 +167,95 @@ def procurement_planner(data):
 
 
 def optimization_results(data):
-    st.header("**Optimization Results**")
-    st.markdown("Material-wise procurement quantities and supplier allocations (sample)")
-    # Simulated results
-    results = data['supplier_price'].groupby(['sku']).apply(lambda g: g.nsmallest(1, 'unit_price')).reset_index(drop=True)
-    results = results.merge(data['skus'][['sku','description']], on='sku')
+    st.markdown("""
+    <style>
+    .opt-header { font-size: 32px; font-weight: bold; color: #1f77b4; margin-bottom: 10px; }
+    .opt-subheader { font-size: 18px; font-weight: 600; color: #2c3e50; margin-top: 20px; margin-bottom: 10px; }
+    .metric-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; color: white; text-align: center; }
+    .constraint-good { background-color: #d4edda; border-left: 4px solid #28a745; padding: 12px; margin: 8px 0; border-radius: 4px; }
+    .constraint-warning { background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin: 8px 0; border-radius: 4px; }
+    .constraint-error { background-color: #f8d7da; border-left: 4px solid #dc3545; padding: 12px; margin: 8px 0; border-radius: 4px; }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    st.markdown('<div class="opt-header">🎯 Optimization Results</div>', unsafe_allow_html=True)
+    st.markdown("Material-wise procurement quantities, supplier allocations, and cost optimization summary")
+    
+    # Simulated results - select lowest cost supplier per SKU
+    results = data['supplier_price'].sort_values('unit_price').drop_duplicates(subset=['sku'], keep='first').reset_index(drop=True)
+    results = results.merge(data['skus'][['sku','description']], on='sku', how='left')
     results['procure_qty'] = np.random.randint(100,1000,size=len(results))
     results['total_cost'] = results['procure_qty'] * results['unit_price']
-    st.dataframe(results[['sku','description','supplier','procure_qty','unit_price','total_cost']].sample(10))
-
-    st.subheader("Constraint Alerts")
-    alerts = ["MOQ violation: SKU-005 at Supplier-A", "Lead-time risk: Supplier-C", "Capacity exceeded: Supplier-F"]
-    for a in alerts:
-        st.warning(a)
-
-    csv = results.to_csv(index=False)
-    st.download_button("Export PO-ready CSV", data=csv, file_name='procurement_plan.csv')
+    
+    # KPI Cards
+    col1, col2, col3, col4 = st.columns(4)
+    total_procurement = results['total_cost'].sum()
+    avg_cost_per_sku = results['total_cost'].mean()
+    supplier_count = results['supplier'].nunique()
+    savings_pct = np.round(np.random.uniform(3, 15), 1)
+    
+    with col1:
+        st.metric("Total Procurement Cost", f"${total_procurement:,.0f}", f"+{np.random.randint(2,8)}%")
+    with col2:
+        st.metric("Avg Cost per SKU", f"${avg_cost_per_sku:,.0f}", f"-{savings_pct}%", delta_color="inverse")
+    with col3:
+        st.metric("Suppliers Engaged", supplier_count)
+    with col4:
+        st.metric("Cost Savings", f"{savings_pct}%", "vs Baseline")
+    
+    # Display results table with better formatting
+    st.markdown('<div class="opt-subheader">📋 Procurement Plan Details</div>', unsafe_allow_html=True)
+    display_cols = ['sku','description','supplier','procure_qty','unit_price','total_cost']
+    sample_size = min(10, len(results))
+    display_df = results[display_cols].sample(n=sample_size).sort_values('total_cost', ascending=False).reset_index(drop=True)
+    display_df = display_df.rename(columns={
+        'sku': 'SKU',
+        'description': 'Description',
+        'supplier': 'Supplier',
+        'procure_qty': 'Qty',
+        'unit_price': 'Unit Price',
+        'total_cost': 'Total Cost'
+    })
+    display_df['Unit Price'] = display_df['Unit Price'].apply(lambda x: f"${x:.2f}")
+    display_df['Total Cost'] = display_df['Total Cost'].apply(lambda x: f"${x:,.0f}")
+    st.dataframe(display_df, use_container_width=True)
+    
+    # Constraint Alerts with better styling
+    st.markdown('<div class="opt-subheader">⚠️ Constraint Analysis</div>', unsafe_allow_html=True)
+    col_alert1, col_alert2, col_alert3 = st.columns(3)
+    with col_alert1:
+        st.markdown('<div class="constraint-error"><strong>❌ MOQ Violation</strong><br/>SKU-005 at Supplier-A<br/><small>Suggested: 500 EA</small></div>', unsafe_allow_html=True)
+    with col_alert2:
+        st.markdown('<div class="constraint-warning"><strong>⏱️ Lead-time Risk</strong><br/>Supplier-C (25 days)<br/><small>Safety buffer: 2 days</small></div>', unsafe_allow_html=True)
+    with col_alert3:
+        st.markdown('<div class="constraint-error"><strong>📦 Capacity Exceeded</strong><br/>Supplier-F 92% utilized<br/><small>Max: 5000 units/period</small></div>', unsafe_allow_html=True)
+    
+    # Feasibility Summary
+    st.markdown('<div class="opt-subheader">✅ Feasibility Summary</div>', unsafe_allow_html=True)
+    feasible_count = np.random.randint(17, 20)
+    col_feas1, col_feas2 = st.columns(2)
+    with col_feas1:
+        st.markdown(f'<div class="constraint-good"><strong>Feasible Plans: {feasible_count}/20 SKUs</strong><br/>Plan can be executed without major constraint violations</div>', unsafe_allow_html=True)
+    with col_feas2:
+        fig_feas = px.pie(values=[feasible_count, 20-feasible_count], names=['Feasible', 'At Risk'], color_discrete_sequence=['#28a745', '#ffc107'])
+        fig_feas.update_layout(height=200, margin=dict(t=0, b=0, l=0, r=0))
+        st.plotly_chart(fig_feas, use_container_width=True)
+    
+    # Export button
+    st.markdown('<div class="opt-subheader">📥 Export & Actions</div>', unsafe_allow_html=True)
+    col_export1, col_export2 = st.columns(2)
+    with col_export1:
+        csv = results.to_csv(index=False)
+        st.download_button(
+            label="📊 Export to CSV",
+            data=csv,
+            file_name='procurement_plan.csv',
+            mime='text/csv',
+            use_container_width=True
+        )
+    with col_export2:
+        if st.button("✅ Approve & Create POs", use_container_width=True):
+            st.success("Purchase Orders created successfully! 🎉")
 
 
 def scenario_simulation(data):
@@ -272,13 +345,128 @@ def input_data_spec(data):
 
 
 def output_data_spec(data):
-    st.header("**Output Data Specification**")
-    st.markdown("Material-wise procurement plan, allocations, period-wise cost and feasibility flags")
-    sample_out = data['supplier_price'].groupby('sku').apply(lambda g: g.nsmallest(1,'unit_price')).reset_index(drop=True)
-    sample_out['suggested_qty'] = np.random.randint(100,1000,size=len(sample_out))
-    sample_out['feasible'] = np.random.choice([True,False], size=len(sample_out), p=[0.9,0.1])
-    st.dataframe(sample_out[['sku','supplier','unit_price','suggested_qty','feasible']].sample(15))
-    st.download_button("Export Output CSV", data=sample_out.to_csv(index=False), file_name='output_spec.csv')
+    st.markdown("""
+    <style>
+    .output-header { font-size: 32px; font-weight: bold; color: #27ae60; margin-bottom: 10px; }
+    .output-subheader { font-size: 18px; font-weight: 600; color: #2c3e50; margin-top: 20px; margin-bottom: 10px; }
+    .status-badge { display: inline-block; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .status-feasible { background-color: #d4edda; color: #155724; }
+    .status-risk { background-color: #fff3cd; color: #856404; }
+    .output-card { background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #27ae60; }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    st.markdown('<div class="output-header">📊 Output Data Specification</div>', unsafe_allow_html=True)
+    st.markdown("Complete procurement plan with material-wise quantities, supplier allocations, period-wise costs, inventory projections, and feasibility assessment")
+    
+    # Generate output spec data - select lowest cost supplier per SKU
+    sample_out = data['supplier_price'].sort_values('unit_price').drop_duplicates(subset=['sku'], keep='first').reset_index(drop=True)
+    sample_out['suggested_qty'] = np.random.randint(100, 1000, size=len(sample_out))
+    sample_out['period_1_cost'] = sample_out['unit_price'] * sample_out['suggested_qty'] * 1.1
+    sample_out['period_2_cost'] = sample_out['unit_price'] * sample_out['suggested_qty'] * 0.95
+    sample_out['inventory_proj'] = np.random.randint(50, 500, size=len(sample_out))
+    sample_out['feasible'] = np.random.choice([True,False], size=len(sample_out), p=[0.85,0.15])
+    
+    # Summary metrics
+    st.markdown('<div class="output-subheader">📈 Output Summary</div>', unsafe_allow_html=True)
+    col_summary1, col_summary2, col_summary3, col_summary4 = st.columns(4)
+    total_output_cost = sample_out['period_1_cost'].sum() + sample_out['period_2_cost'].sum()
+    feasible_count = sample_out['feasible'].sum()
+    
+    with col_summary1:
+        st.metric("Total Output Cost (2 Periods)", f"${total_output_cost:,.0f}")
+    with col_summary2:
+        st.metric("Feasible SKUs", f"{feasible_count}/{len(sample_out)}")
+    with col_summary3:
+        st.metric("Total Inventory Projected", f"{sample_out['inventory_proj'].sum():,} units")
+    with col_summary4:
+        st.metric("Avg Qty per SKU", f"{sample_out['suggested_qty'].mean():.0f}")
+    
+    # Detailed output table
+    st.markdown('<div class="output-subheader">📋 Material-wise Procurement Plan</div>', unsafe_allow_html=True)
+    display_size = min(15, len(sample_out))
+    output_display = sample_out[['sku','supplier','period_1_cost','period_2_cost','suggested_qty','inventory_proj','feasible']].sample(n=display_size).sort_values('period_1_cost', ascending=False).reset_index(drop=True)
+    output_display = output_display.rename(columns={
+        'sku': 'SKU',
+        'supplier': 'Supplier',
+        'period_1_cost': 'Period 1 Cost',
+        'period_2_cost': 'Period 2 Cost',
+        'suggested_qty': 'Qty',
+        'inventory_proj': 'Inventory Proj',
+        'feasible': 'Feasible'
+    })
+    output_display['Period 1 Cost'] = output_display['Period 1 Cost'].apply(lambda x: f"${x:,.0f}")
+    output_display['Period 2 Cost'] = output_display['Period 2 Cost'].apply(lambda x: f"${x:,.0f}")
+    output_display['Feasible'] = output_display['Feasible'].apply(lambda x: '✅ Yes' if x else '⚠️ At Risk')
+    st.dataframe(output_display, use_container_width=True)
+    
+    # Period-wise cost breakdown
+    st.markdown('<div class="output-subheader">💰 Period-wise Cost Projection</div>', unsafe_allow_html=True)
+    period_costs = pd.DataFrame({
+        'Period': ['Period 1', 'Period 2'],
+        'Cost': [sample_out['period_1_cost'].sum(), sample_out['period_2_cost'].sum()]
+    })
+    fig_periods = px.bar(period_costs, x='Period', y='Cost', color='Period',
+                        color_discrete_sequence=['#3498db', '#2ecc71'],
+                        title='Projected Cost by Period')
+    fig_periods.update_layout(height=300, showlegend=False, hovermode='x unified')
+    fig_periods.update_traces(hovertemplate='<b>%{x}</b><br>Cost: $%{y:,.0f}<extra></extra>')
+    st.plotly_chart(fig_periods, use_container_width=True)
+    
+    # Feasibility summary with warnings
+    st.markdown('<div class="output-subheader">⚠️ Feasibility & Risk Assessment</div>', unsafe_allow_html=True)
+    col_risk1, col_risk2 = st.columns(2)
+    with col_risk1:
+        st.markdown(f'''<div class="output-card">
+        <strong>✅ Feasible Records: {feasible_count}</strong><br/>
+        {(feasible_count/len(sample_out)*100):.1f}% of SKUs can be procured as planned
+        </div>''', unsafe_allow_html=True)
+    with col_risk2:
+        st.markdown(f'''<div class="output-card">
+        <strong>⚠️ At-Risk Records: {len(sample_out)-feasible_count}</strong><br/>
+        May require supplier negotiation or modified quantities
+        </div>''', unsafe_allow_html=True)
+    
+    # Shortage analysis
+    st.markdown('<div class="output-subheader">📉 Shortage & Service Level Analysis</div>', unsafe_allow_html=True)
+    shortage_scenarios = pd.DataFrame({
+        'Scenario': ['Current Plan', 'Conservative (-10%)', 'Aggressive (+15%)'],
+        'Shortage Risk': [2.5, 5.8, 1.2],
+        'Service Level': [97.5, 94.2, 98.8]
+    })
+    fig_shortage = px.line(shortage_scenarios, x='Scenario', y=['Shortage Risk', 'Service Level'],
+                           markers=True, title='Service Level vs Shortage Risk')
+    fig_shortage.update_layout(height=300, hovermode='x unified')
+    st.plotly_chart(fig_shortage, use_container_width=True)
+    
+    # Export options
+    st.markdown('<div class="output-subheader">📥 Export & Download Options</div>', unsafe_allow_html=True)
+    col_exp1, col_exp2, col_exp3 = st.columns(3)
+    
+    with col_exp1:
+        csv_export = sample_out.to_csv(index=False)
+        st.download_button(
+            label="📊 Export to CSV",
+            data=csv_export,
+            file_name='output_specification.csv',
+            mime='text/csv',
+            use_container_width=True
+        )
+    
+    with col_exp2:
+        # Create Excel-like format for better reporting
+        excel_data = sample_out[['sku','supplier','suggested_qty','period_1_cost','period_2_cost','inventory_proj','feasible']].to_csv(index=False)
+        st.download_button(
+            label="📈 Export Summary Report",
+            data=excel_data,
+            file_name='output_summary.csv',
+            mime='text/csv',
+            use_container_width=True
+        )
+    
+    with col_exp3:
+        if st.button("✨ Generate Executive Summary", use_container_width=True):
+            st.info("📄 Executive Summary generated and sent to stakeholders!")
 
 
 PAGE_FUNCS = {
