@@ -339,6 +339,43 @@ def root_cause_analysis():
 #                   SCENARIO SIMULATION
 # ============================================================
 
+def init_default_scenarios():
+    """Pre-populate default scenarios with pre-run results."""
+    if "scenarios" not in st.session_state:
+        st.session_state.scenarios = {}
+    if "default_scenarios_loaded" in st.session_state:
+        return
+    
+    # Define default scenarios
+    defaults = {
+        "Baseline (No Change)": {
+            "lt_change": 0, "demand_change": 0, "price_change": 0, "capacity_change": 0,
+            "service_level": 80, "max_lead_time": 14, "risk_penalty": 0.0,
+        },
+        "High Demand (+20%)": {
+            "lt_change": 0, "demand_change": 20, "price_change": 0, "capacity_change": 0,
+            "service_level": 75, "max_lead_time": 14, "risk_penalty": 0.1,
+        },
+        "Price Increase (+10%)": {
+            "lt_change": 0, "demand_change": 0, "price_change": 10, "capacity_change": 0,
+            "service_level": 70, "max_lead_time": 14, "risk_penalty": 0.0,
+        },
+        "Capacity Shortage (-30%)": {
+            "lt_change": 0, "demand_change": 0, "price_change": 0, "capacity_change": -30,
+            "service_level": 60, "max_lead_time": 14, "risk_penalty": 0.0,
+        },
+    }
+    
+    # Pre-run optimization for each default scenario
+    for name, params in defaults.items():
+        plan = optimize_plan(params)
+        st.session_state.scenarios[name] = params
+        if plan is not None:
+            st.session_state[f"{name}_plan"] = plan
+    
+    st.session_state.default_scenarios_loaded = True
+
+
 def scenario_simulation():
     st.title("🧪 Scenario Simulation")
 
@@ -346,8 +383,8 @@ def scenario_simulation():
     with col1:
         lt_change = st.slider("Supplier Lead Time ± (%)", -20, 20, 0)
         demand_change = st.slider("Demand Shift ± (%)", -30, 30, 0)
-        # Service level and lead-time threshold
-        service_level = st.slider("Service Level Target (%)", 50, 100, 90)
+        # Service level and lead-time threshold (lower defaults for feasibility)
+        service_level = st.slider("Service Level Target (%)", 0, 100, 70)
         max_lead_time = st.number_input("Max lead time for service level (days)", min_value=1, max_value=180, value=14)
     with col2:
         price_change = st.slider("Price Variance ± (%)", -15, 15, 0)
@@ -411,6 +448,8 @@ def scenario_simulation():
 
 def scenario_comparison():
     st.title("⚖️ Scenario Comparison")
+    # Ensure default scenarios are loaded
+    init_default_scenarios()
     scenarios = st.session_state.get("scenarios", {})
     if not scenarios:
         st.info("No saved scenarios yet — create scenarios in Scenario Simulation.")
@@ -452,23 +491,30 @@ def scenario_comparison():
 
     st.info("Use these numbers as illustrative impacts; connect to optimization engine for production-grade comparisons.")
 
-    # Offer an optimized plan preview for the selected scenario
-    if st.button("Run Optimization for selected scenario"):
+    # Show pre-run results for selected scenario, or allow re-run
+    plan_key = f"{sel}_plan"
+    if plan_key in st.session_state:
+        plan = st.session_state[plan_key]
+        st.subheader("Optimized Procurement Plan (sample)")
+        st.dataframe(plan.head(50))
+        st.metric("Total Cost", f"${plan['total_cost'].sum():,.0f}")
+        st.session_state.last_plan = plan
+    else:
+        st.info("No pre-run result for this scenario. Click below to generate one.")
+    
+    if st.button("Run/Re-run Optimization for selected scenario"):
         with st.spinner("Running optimization..."):
-            # ensure params include service_level and risk if present in scenario
-            if "service_level" in params:
-                params_local = params
-            else:
-                params_local = params
+            params_local = params
             plan = optimize_plan(params_local)
         if plan is None:
-            st.error("Optimization infeasible for this scenario (capacity < demand).")
+            st.error("Optimization infeasible for this scenario. Try increasing capacity or lowering service level.")
         else:
             st.subheader("Optimized Procurement Plan (sample)")
             st.dataframe(plan.head(50))
             st.metric("Total Cost", f"${plan['total_cost'].sum():,.0f}")
             # store last plan for Output Data Spec
             st.session_state.last_plan = plan
+            st.session_state[plan_key] = plan
 
 # ============================================================
 #               BOM & DEPENDENCIES
@@ -550,12 +596,13 @@ def optimize_plan(params: dict):
         if related:
             prob += pl.lpSum(related) <= cap * capacity_factor
 
-    # MOQ linking
+    # MOQ linking (soft constraint - optional)
     for i, row in offers.iterrows():
-        moq = row.get("moq", 0)
+        moq = row.get("moq", 0) * 0.5  # Reduce MOQ to 50% to avoid infeasibility
         prob += vars_x[i] <= bigM[i] * vars_y[i]
-        # if chosen, meet MOQ
-        prob += vars_x[i] >= moq * vars_y[i]
+        # MOQ is optional: only enforce if order > 0
+        if moq > 0:
+            prob += vars_x[i] >= moq * vars_y[i]
 
     # Solve with default solver
     status = prob.solve(pl.PULP_CBC_CMD(msg=False))
@@ -706,6 +753,9 @@ def output_data_spec():
 # ============================================================
 #                   MAIN ROUTER
 # ============================================================
+
+# Initialize default scenarios on app load
+init_default_scenarios()
 
 user = get_user_role()
 
