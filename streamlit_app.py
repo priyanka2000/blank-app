@@ -139,6 +139,7 @@ def sidebar_navigation():
             "Optimization Results",
             "Root Cause Analysis",
             "Scenario Simulation",
+            "Scenario Comparison",
             "BOM & Dependencies",
             "Constraints Dashboard",
             "PO Creation",
@@ -148,6 +149,17 @@ def sidebar_navigation():
             "Output Data Spec",
         ],
     )
+
+
+def get_user_role():
+    if "user_role" not in st.session_state:
+        st.session_state.user_role = "Planner"
+    st.session_state.user_role = st.sidebar.selectbox(
+        "User Role",
+        ["Executive", "Planner", "Buyer", "Engineer"],
+        index=["Executive", "Planner", "Buyer", "Engineer"].index(st.session_state.user_role),
+    )
+    return st.session_state.user_role
 
 
 # ============================================================
@@ -184,11 +196,16 @@ def exec_dashboard():
 
 def planner_workbench():
     st.title("🛠️ Procurement Planner Workbench")
+    user = st.session_state.get("user_role", "Planner")
 
     left, right = st.columns([2, 1])
     with left:
         st.subheader("SKU Master (Editable)")
-        st.data_editor(data["skus"], num_rows="dynamic")
+        # Planners can edit SKU master; others get read-only view
+        if user == "Planner":
+            st.data_editor(data["skus"], num_rows="dynamic")
+        else:
+            st.dataframe(data["skus"])
 
         st.subheader("Forecast Sample")
         sample = data["forecast"][data["forecast"]["period"] == data["periods"][0]].sample(10)
@@ -203,6 +220,15 @@ def planner_workbench():
 
     st.subheader("Supplier Offers")
     st.dataframe(data["supplier_price"].sample(20))
+
+    # Quick KPIs for planners/buyers
+    if user in ("Planner", "Buyer"):
+        col1, col2, col3 = st.columns(3)
+        total_forecast = data["forecast"]["forecast_qty"].sum()
+        avg_price = data["supplier_price"]["unit_price"].mean()
+        col1.metric("Total Forecast Qty (12m)", f"{total_forecast}")
+        col2.metric("Avg Supplier Unit Price", f"${avg_price:.2f}")
+        col3.metric("Unique Suppliers", f"{data['suppliers']['supplier'].nunique()}")
 
 # ============================================================
 #                   OPTIMIZATION RESULTS
@@ -228,7 +254,27 @@ def optimization_results():
     col4.metric("Cost Savings", f"{np.random.uniform(5, 15):.1f}%")
 
     st.subheader("Procurement Plan")
-    st.dataframe(results[["sku", "supplier", "procure_qty", "unit_price", "total_cost"]])
+    display_df = results[["sku", "supplier", "procure_qty", "unit_price", "total_cost"]].copy()
+    st.dataframe(display_df)
+
+    # Recommendation workflow: allow user to accept/reject recommended supplier per SKU
+    st.markdown("**Recommendation Actions**")
+    selected_skus = st.multiselect("Select SKUs to accept recommendation", options=results["sku"].tolist())
+    if "baseline_plan" not in st.session_state:
+        # store baseline for comparison
+        st.session_state.baseline_plan = results.copy()
+
+    if st.button("Apply Accepted Recommendations"):
+        accepted = results[results["sku"].isin(selected_skus)].copy()
+        # compute impact: accepted replace baseline where accepted
+        baseline_total = st.session_state.baseline_plan["total_cost"].sum()
+        new_total = baseline_total - st.session_state.baseline_plan[st.session_state.baseline_plan["sku"].isin(selected_skus)]["total_cost"].sum() + accepted["total_cost"].sum()
+        st.success(f"Applied {len(selected_skus)} recommendations — New Total Cost: ${new_total:,.0f} (baseline ${baseline_total:,.0f})")
+        # record accepted SKUs for session
+        st.session_state.accepted_skus = list(set(st.session_state.get("accepted_skus", [])) | set(selected_skus))
+
+    if st.session_state.get("accepted_skus"):
+        st.info(f"Accepted SKUs this session: {', '.join(st.session_state.accepted_skus)}")
 
 # ============================================================
 #                   ROOT CAUSE ANALYSIS
@@ -273,6 +319,70 @@ def scenario_simulation():
     })
 
     st.info("Scenario applied. Optimization impact will appear here.")
+
+    # Allow saving scenarios for comparison
+    st.subheader("Save Scenario")
+    name = st.text_input("Scenario name")
+    if st.button("Save Scenario"):
+        if not name:
+            st.error("Provide a scenario name")
+        else:
+            if "scenarios" not in st.session_state:
+                st.session_state.scenarios = {}
+            st.session_state.scenarios[name] = {
+                "lt_change": lt_change,
+                "demand_change": demand_change,
+                "price_change": price_change,
+                "capacity_change": capacity_change,
+            }
+            st.success(f"Scenario '{name}' saved")
+
+# ============================================================
+#               SCENARIO COMPARISON
+# ============================================================
+
+def scenario_comparison():
+    st.title("⚖️ Scenario Comparison")
+    scenarios = st.session_state.get("scenarios", {})
+    if not scenarios:
+        st.info("No saved scenarios yet — create scenarios in Scenario Simulation.")
+        return
+
+    # Build comparison metrics for each scenario
+    rows = []
+    baseline = (
+        data["supplier_price"].sort_values("unit_price").drop_duplicates(subset=["sku"]) 
+    )
+    baseline["procure_qty"] = np.random.randint(200, 1000, size=len(baseline))
+    baseline["total_cost"] = baseline["procure_qty"] * baseline["unit_price"]
+    baseline_total = baseline["total_cost"].sum()
+
+    for name, params in scenarios.items():
+        # Simulate simple impacts
+        demand_factor = 1 + params.get("demand_change", 0) / 100.0
+        price_factor = 1 + params.get("price_change", 0) / 100.0
+        total_qty = int(baseline["procure_qty"].sum() * demand_factor)
+        avg_price = baseline["unit_price"].mean() * price_factor
+        total_cost = (baseline["procure_qty"].sum() * avg_price)
+        suppliers_engaged = baseline["supplier"].nunique()
+        rows.append({
+            "scenario": name,
+            "total_qty": total_qty,
+            "avg_unit_price": round(avg_price, 2),
+            "total_cost": round(total_cost, 2),
+            "savings_vs_baseline_pct": round(100 * (baseline_total - total_cost) / baseline_total, 2),
+            "suppliers_engaged": suppliers_engaged,
+        })
+
+    cmp_df = pd.DataFrame(rows).set_index("scenario")
+    st.dataframe(cmp_df)
+
+    st.subheader("Detail: select scenario to view distribution")
+    sel = st.selectbox("Choose scenario", options=list(scenarios.keys()))
+    params = scenarios[sel]
+    st.write(params)
+
+    st.info("Use these numbers as illustrative impacts; connect to optimization engine for production-grade comparisons.")
 
 # ============================================================
 #               BOM & DEPENDENCIES
@@ -374,6 +484,8 @@ def output_data_spec():
 #                   MAIN ROUTER
 # ============================================================
 
+user = get_user_role()
+
 page = sidebar_navigation()
 
 if page == "Executive Overview":
@@ -386,6 +498,8 @@ elif page == "Root Cause Analysis":
     root_cause_analysis()
 elif page == "Scenario Simulation":
     scenario_simulation()
+elif page == "Scenario Comparison":
+    scenario_comparison()
 elif page == "BOM & Dependencies":
     bom_dependencies()
 elif page == "Constraints Dashboard":
